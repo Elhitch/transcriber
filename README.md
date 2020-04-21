@@ -6,3 +6,8 @@ The script aims to get transcriptions even for more complex structures such as p
 # Useful links
 Some useful links that might be used throughout the research are stored here:
 - [A Glossary of Linguistic Terms, Dr Peter Coxhead](https://www.cs.bham.ac.uk/~pxc/nlp/nlpgloss.html)
+
+# Things to keep in mind
+As a WIP project, there are some caveats to have in mind:
+- Nouns ending in 's' may not be processed according to actual standard;
+- The code is very clumsy and has to be entirely rewritten.
