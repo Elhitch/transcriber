@@ -2,7 +2,6 @@
 import os
 import sys
 import argparse
-import json
 import urllib3
 from html.parser import HTMLParser
 from openpyxl import load_workbook
