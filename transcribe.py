@@ -5,15 +5,17 @@ import argparse
 import json
 import urllib3
 from html.parser import HTMLParser
+from openpyxl import load_workbook
 
 VERBOSE_DEBUG = False
+PLAINTEXT = False
 FILENAME = ""
 
 ###     TO DO   ###
-# - Изходът дума да се маркира от кой речник е взета и дали е по британски или американски стандард
-#
-#
-#
+# - Mark output and note whether it follows British or American English transcription
+# - Add a list to the script containing all irregular verbs for easy lookup: https://myefe.com/english-irregular-verbs
+# - Reduce iterations when checking for past tense of regular verbs - currently, there is 1 additional iteration
+# - The verb "bring" incorrectly removes "ing" and queries for "br"
 ###      END    ###
 
 # The URL which is used to look up words
@@ -82,7 +84,7 @@ class DictionaryParser(HTMLParser):
                 self.type = data
             elif self.recordType == 'w':
                 self.found[self.type].append(data.strip('/'))
-                print (data.strip('/'))
+                # print (data.strip('/'))
 
 def syllableCount(word):
     word = word.lower()
@@ -113,14 +115,6 @@ def getPluralOrThidPerson(type, word, items):
         items[type][pos] += "z"
     return items
 
-def cleanData(data):
-    hasNouns = False
-    for dictionary in data:
-        for key in dictionary:
-            # print (key)
-            # if key != "noun" and "noun" in data and endsInS:
-            pass
-
 def getTranscription(wordToTranscribe, wordType=None):
     data = []
     word = wordToTranscribe
@@ -136,10 +130,12 @@ def getTranscription(wordToTranscribe, wordType=None):
         endsInS = False
         isPossessive = False
         isPluralOrThirdPerson = False
-        isPlural = False
         endsInIng = False
+        truncatedIng = False
         stopIterating = False
         syllables = syllableCount(word)
+        isPastTense = False      
+        doneExchange = False
 
         if "n't" in word:
             word = word[:-3]
@@ -156,6 +152,12 @@ def getTranscription(wordToTranscribe, wordType=None):
         elif word[-1] == "s" and word[-4:] != "ness":
             endsInS = True
             isPluralOrThirdPerson = True
+            if word[-3:] == "ies":
+                word = word[:-3] + 'y'
+        
+        elif word[-2:] == "ed":
+            word = word [:-1]
+            isPastTense = True
 
         # If the words ends in 'ing', mark it down. This should be mainly used for present continuous form of verbs,
         # but there might be some false positives which are checked later on - such as "bring".
@@ -163,12 +165,14 @@ def getTranscription(wordToTranscribe, wordType=None):
             endsInIng = True
 
         URL = baseURL + word.strip()
-        print("URL:", URL)
+        if VERBOSE_DEBUG: print ("[*] [DEBUG] URL:", URL)
         
         # If the word doesn't have any homonyms, only look through the content on this page.
         # Otherwise, keep iterating until the server returns "Not Found".
         while iterateURLs:
-            print ("Word:", word)
+            if VERBOSE_DEBUG: 
+                print ("---- NEW ITERATION -", iteration, "----")
+                print ("[*] [DEBUG] Word:", word)
             parser = DictionaryParser()
             openURL = http.request("GET", URL)
             if VERBOSE_DEBUG: print ("[*] [DEBUG] Opening URL:", URL)
@@ -182,31 +186,29 @@ def getTranscription(wordToTranscribe, wordType=None):
             elif openURL.status == 404:
                 iterateURLs = False
                 if VERBOSE_DEBUG: print ("[*] [DEBUG] URL", URL, "returned HTTP 404.")
-                # if endsInS and iteration > 2:
-                #     endsInS = False
             else:
                 print("An error occurred.")
 
             # If the word is the only thing displayed in the URL after the last slash, then that's the only match
             # so the script stops iterating.
-            # print (redirectedURL.split("/")[-1], word)
-            if redirectedURL.split("/")[-1] == word:
-                if VERBOSE_DEBUG: print ("Redirected URL:", redirectedURL)
+            redirectedWord = redirectedURL.split("/")[-1]
+            if redirectedWord == word:
+                if VERBOSE_DEBUG: print ("[*] [DEBUG] Redirected URL:", redirectedURL)
                 # If a match wasn't found and the word ends in 'ing', it's a verb.
                 # Try to get the root form of the verb and search based on it.
                 # Source: https://web2.uvcs.uvic.ca/courses/elc/sample/beginner/gs/gs_53.htm
-                if endsInIng:
+                if endsInIng and not truncatedIng:
+                    print (word)
                     baseWord = word[:-3]
                     #print(syllableCount(baseWord), baseWord[-3], baseWord[-2])
-                    if baseWord[-1] == baseWord[-2]:
+                    if baseWord[-1] == baseWord[-2] and syllables == 1:
                         baseWord = baseWord[:-1]
                     elif baseWord[-2] in VOWELS and ((baseWord[-1] in VOICED_CONSONANTS) or (baseWord[-1] in VOICELESS_CONSONANTS)):
                         baseWord += 'e'
-                    # elif baseWord[-1] in VOICED_CONSONANTS or baseWord[-1] in VOICELESS_CONSONANTS:
-                        # baseWord += 'e'
                     URL = baseURL + baseWord
-                    print(URL)
                     iterateURLs = True
+                    truncatedIng = True
+                    # print (word)
                 elif endsInS:
                     word = word[:-1]
                     URL = baseURL + word
@@ -216,16 +218,41 @@ def getTranscription(wordToTranscribe, wordType=None):
                         if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to exceeded iteration limit.")
                     else:
                         iterateURLs = True
+                elif isPastTense:
+                    word = word[:-1]
+                    URL = baseURL + word
+                    print ("New URL: ", URL)
+                    if iteration > 0 and not doneExchange:
+                        if not doneExchange and word[-1] == 'i':
+                            word = word[:-1] + 'y'
+                            URL = baseURL + word
+                            doneExchange = True
+                            iterateURLs = True
+                        elif iteration == 1:
+                            iterateURLs = True
+                        else:
+                            iterateURLs = False
+                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to exceeded iteration limit.")
+                        print (word, iteration)
+                    else:
+                        iterateURLs = True
                 else:
                     iterateURLs = False
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to no more possible matches.")
             else:
-                if VERBOSE_DEBUG: print ("[*] [DEBUG] NO MATCH DETECTED. URL:", redirectedURL, "\r\nWord:", word)
-                iteration_URL += 1
-                URL = redirectedURL[0:-1] + str(iteration_URL)
-                if VERBOSE_DEBUG:
-                    print ("[*] [DEBUG] TRYING TO REDIRECT TO:", URL)
-                    print ("[*] [DEBUG] ITERATION STATUS:", iterateURLs)
+                if endsInIng and truncatedIng:
+                    if redirectedWord[-1] == 'e':
+                        URL = baseURL + redirectedWord[:-1]
+                        iterateURLs = True
+                    else:
+                        iterateURLs = False
+                else:
+                    if VERBOSE_DEBUG: print ("[*] [DEBUG] NO MATCH DETECTED. URL:", redirectedURL, "\r\nWord:", word)
+                    iteration_URL += 1
+                    URL = redirectedURL[:-1] + str(iteration_URL)
+                    if VERBOSE_DEBUG:
+                        print ("[*] [DEBUG] TRYING TO REDIRECT TO:", URL)
+                        print ("[*] [DEBUG] ITERATION STATUS:", iterateURLs)
             
             if bool(parser.found) != False:
                 items = parser.found
@@ -247,11 +274,9 @@ def getTranscription(wordToTranscribe, wordType=None):
                     else:
                         data.append(items)
                 else:
-                    print (data)
-                    if not endsInS and "noun" in data[0]:
-                        print ("GOT IT")
                     data.append(items)
             
+            if VERBOSE_DEBUG: print ("---- END ITERATION -", iteration, "----")
             iteration += 1
             parser.close()
     except Exception as e:
@@ -260,14 +285,19 @@ def getTranscription(wordToTranscribe, wordType=None):
         print ("Arguments", e.args)
         print ("Exception txt:", e)
 
+    if VERBOSE_DEBUG: print ("[*] [DEBUG]", data)
     #print ("noun" in data)
     if (endsInS or isPluralOrThirdPerson) and data is not None and hasNoun:
         for dictionary in data:
             for key in list(dictionary):
-                if key != "noun":
+                if key != "noun" and key != "verb":
                     print ("Deleting:", dictionary[key])
                     del dictionary[key]
-    print (data)
+    elif isPastTense or (endsInIng and not truncatedIng):
+        for dictionary in data:
+            for key in list(dictionary):
+                if key != "verb":
+                    del dictionary[key]
     return data
 
 def getComplexTranscription(wordsCombination):
@@ -292,50 +322,120 @@ def is_valid_file(parser, arg):
 
 argParser = argparse.ArgumentParser(description="Get transcriptions for words from the Oxford Learner's Dictionaries.", allow_abbrev=False)
 argParser.add_argument("-v", "--verbose", help="Produce additional DEBUG output.", action="store_true")
-argParser.add_argument("-f", "--file", help="Specify the name of the file where the input values are stored.", action="store",
-                        type=lambda x: is_valid_file(argParser, x), nargs=1)
+argParser.add_argument("-t", "--plaintext", help="If the file that has to be transcribed is not in Excel, use this flag.", action="store_true")
+# argParser.add_argument("-f", "--file", help="Specify the name of the file where the input values are stored.", action="store",
+#                         type=lambda x: is_valid_file(argParser, x), nargs=1)
 argParser.add_argument("-o", "--output", help="Save output to a separate file.", action="store", type=argparse.FileType('w'), nargs=1)
+argParser.add_argument('Path', help='Path to a .xls(x) containing words to be transcribed. If .txt file, use -t flag', type=lambda x: is_valid_file(argParser, x), nargs=1, metavar='[File to get word forms from]')
 
 args = argParser.parse_args()
-VERBOSE_DEBUG = args.verbose
-if args.file is not None:
-    FILENAME = args.file[0]
-else:
-    FILENAME = "transcribe.txt"
 
-with open(FILENAME, 'r') as file:
-    for word in file:
-        # Ignore commented words
-        if word[0] != '#':
-            word = word.strip()
-            if word != '':
-                complex = False
-                if '-' in word:
-                    result = getComplexTranscription(word)
-                    print (word, "(complex)")
-                    print ("\t" + result)
-                else:
-                    if "n't" not in word and "'ll" not in word and "'s" not in word:
-                        word = word.replace("'", '-').lower()
+VERBOSE_DEBUG = args.verbose
+PLAINTEXT = args.plaintext
+
+FILENAME = args.Path[0]
+if FILENAME[-3:] == "txt" and not PLAINTEXT:
+    print ("It looks like you're pointing to a .txt file - please use -t.")
+    sys.exit()
+elif FILENAME[-3:] == "xls" or FILENAME[-4:] == "xlsx" and PLAINTEXT:
+    print ("Looks like you're pointing to a .xls(x) file, please omit -t.")
+    sys.exit()
+
+if PLAINTEXT:
+    with open(FILENAME, 'r') as file:
+        for word in file:
+            # Ignore commented words
+            if word[0] != '#':
+                word = word.strip()
+                if word != '':
+                    complex = False
+                    if '-' in word:
+                        result = getComplexTranscription(word)
+                        print (word, "(complex)")
+                        print ("\t" + result)
                     else:
-                        word = word.lower()
-                    result = getTranscription(word)
-                    for transcriptions in result:
-                        for wordType in transcriptions:
-                            print(word + ' (' + wordType + ')')
-                            if wordType == "verb":
-                                if word[-3:] == "ing":
-                                    print ("\t" + transcriptions["verb"][5])
-                                elif word[-1] == "s":
-                                    # 'sses' at the end of the verb indicates he / she / it form.
-                                    # if word[-4:] == "sses":
-                                    #     print ("\t" + transcriptions["verb"][2])
-                                    if word[-2:] == "ss":
-                                        print ("\t" + transcriptions["verb"][1])
+                        if "n't" not in word and "'ll" not in word and "'s" not in word:
+                            word = word.replace("'", '-').lower()
+                        else:
+                            word = word.lower()
+                        result = getTranscription(word)
+                        for transcriptions in result:
+                            for wordType in transcriptions:
+                                print(word + ' (' + wordType + ')')
+                                if wordType == "verb":
+                                    if word[-3:] == "ing":
+                                        if syllableCount(word) == 1:
+                                            print ("\t" + transcriptions["verb"][0])
+                                        else:
+                                            print ("\t" + transcriptions["verb"][5])
+                                    elif word[-1] == "s":
+                                        # 'sses' at the end of the verb indicates he / she / it form.
+                                        # if word[-4:] == "sses":
+                                        #     print ("\t" + transcriptions["verb"][2])
+                                        if word[-2:] == "ss":
+                                            print ("\t" + transcriptions["verb"][1])
+                                        else:
+                                            print ("\t" + transcriptions["verb"][2])
+                                    elif word[-2:] == "ed":
+                                        print ("\t" + transcriptions["verb"][3])
                                     else:
-                                        print ("\t" + transcriptions["verb"][2])
+                                        print ("\t" + transcriptions["verb"][1])
                                 else:
-                                    print ("\t" + transcriptions["verb"][1])
+                                    for transcription in transcriptions[wordType]:
+                                        print("\t" + transcription)
+else:
+    workbook = load_workbook(filename=FILENAME)
+    sheet = workbook.active
+    i = 1
+    rPos = "A" + str(1)
+    wPos = "B" + str(1)
+    while sheet[rPos].value != None:
+        word = sheet[rPos].value
+        word = word.strip()
+        complex = False
+        if '-' in word:
+            result = getComplexTranscription(word)
+            print (word, "(complex)")
+            print ("\t" + result)
+        else:
+            if "n't" not in word and "'ll" not in word and "'s" not in word:
+                word = word.replace("'", '-').lower()
+            else:
+                word = word.lower()
+            result = getTranscription(word)
+            for transcriptions in result:
+                for wordType in transcriptions:
+                    transcribed = ""
+                    print(word + ' (' + wordType + ')')
+                    if wordType == "verb":
+                        if word[-3:] == "ing":
+                            if syllableCount(word) == 1:
+                                transcribed = transcriptions["verb"][0]
                             else:
-                                for transcription in transcriptions[wordType]:
-                                    print("\t" + transcription)
+                                transcribed = transcriptions["verb"][5]
+                            
+                        elif word[-1] == "s":
+                            # 'sses' at the end of the verb indicates he / she / it form.
+                            # if word[-4:] == "sses":
+                            #     print ("\t" + transcriptions["verb"][2])
+                            if word[-2:] == "ss":
+                                transcribed = transcriptions["verb"][1]
+                            else:
+                                transcribed = transcriptions["verb"][2]
+                        elif word[-2:] == "ed":
+                            transcribed = transcriptions["verb"][3]
+                        else:
+                            transcribed = transcriptions["verb"][1]
+                    else:
+                        for transcription in transcriptions[wordType]:
+                            if transcription != "":
+                                transcribed = "\r\n" + transcription
+                    # print ("Before writing:", transcribed)
+                    sheet[wPos] = transcribed
+                    wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
+        i += 1
+        rPos = "A" + str(i)
+        wPos = "B" + str(i)
+
+    workbook.save(filename="test_input.xlsx")
+    workbook.close()
