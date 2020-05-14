@@ -36,6 +36,94 @@ VOICELESS_CONSONANTS = ['ch', 'f', 'k', 'p', 'sh', 't', 'th']
 # Y is part of this list because the checks performed in this script only check the last letter which, if 'y', is interpreted as a vowel according to the source cited above.
 VOWELS = ['a', 'а', 'e', 'i', 'o', 'u', 'y']
 
+# A list of irregular verbs that couldn't be found at the Oxford Learner's Dictionaries.
+# Source: https://www.englishpage.com/irregularverbs/irregularverbs.html#
+# To do prefix checks after first unsuccessful iteration for:
+#   - mis
+#   - de
+#   - dis
+#   - re
+#   - out
+#   - over
+#   - partake (?)
+#   - pre
+#   - under
+#   - un - ˌʌn
+#   - 
+#   - 
+#   - 
+#   - 
+# Also some present forms of verbs are listed below due to them being represented in a different way in the URL of OLD, e.g. sow1.
+# NB! "inbreed" has been omitted
+# NB! wound has two forms (both not directly found using this script) - noun and verb. The wordform has thus not been included.
+# NB! Some verbs, such as "withdraw", have alternative spellings. Only one of these has been taken into consideration
+IRREGULAR_VERBS = [
+    {"arisen": "əˈrɪzn"},
+    {"beaten": "ˈbiːtn"},
+    {"bid": "bɪd"},
+    {"bidden": "ˈbɪdn"},
+    {"bled": "bled"},
+    {"daydreamt": "ˈdeɪdremt"},
+    {"do": "duː"},
+    {"dreamt": "dremt"},
+    {"dwelled": "dwelt"},
+    {"eaten": "ˈiːtn"},
+    {"forewent": "fɔːˈwent"},
+    {"foregone": "fɔːˈɡɒn"},
+    {"foresaw": "fɔːˈsɔː"},
+    {"foreseen": "fɔːˈsiːn"},
+    {"forgiven": "fəˈɡɪvn"},
+    {"forsook": "forsook"},
+    {"forsaken": "fəˈseɪkən"},
+    {"frostbit": "ˈfrɒstbɪt"},
+    {"frostbitten": "ˈfrɒstbɪtn"},
+    {"hewn": "hjuːn"},
+    {"hid": "hɪd"},
+    {"leant": "lent"},
+    {"leapt": "lept"},
+    {"learnt": "lɜːnt"},
+    {"lie": "laɪ"},
+    {"lay": "leɪ"},
+    {"mown": "məʊn"},
+    {"partaken": "pɑːˈteɪkən"},
+    {"risen": "ˈrɪzn"},
+    {"sawn": "sɔːn"},
+    {"slid": "slɪd"},
+    {"sow": "səʊ"},
+    {"sowed": "səʊd"},
+    {"sown": "səʊn"},
+    {"spelt": "spelt"},
+    {"spilt": "spɪlt"},
+    {"strewn": "struːn"},
+    {"striven": "ˈstrɪvn"},
+    {"sunburnt": "ˈsʌnbɜːnt"},
+    {"taken": "ˈteɪkən"},
+    {"typewrite": "taɪpraɪt"},
+    {"typewrote": "taɪprəʊt"},
+    {"typewritten": "taɪprɪtn"},
+    # {"unbent": "ˌʌnˈbent"},
+    # {"unbind": "ˌʌnbaɪnd"},
+    # {"unbound": "ˌʌnbaʊnd"},
+    # {"unclothe": "ˌʌnkləʊð"},
+    # {"unclothed": "ˌʌnkləʊðd"},
+    # {"unclad": "ˌʌnklæd"},
+    {"waylaid": "weɪˈleɪd"},
+    {"withdraw": "wɪðˈdrɔː"},
+    {"withdrew": "wɪðˈdruː"},
+    {"withdrawn": "wɪðˈdrɔːn"},
+    {"withheld": "wɪðˈheld"},
+    {"withstood": "wɪðˈstʊd"},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    {"": ""},
+    
+]
+
 class DictionaryParser(HTMLParser):
     def __init__(self):
         HTMLParser.__init__(self)
@@ -297,6 +385,9 @@ def getTranscription(wordToTranscribe, wordType=None):
             for key in list(dictionary):
                 if key != "verb":
                     del dictionary[key]
+
+    print (data)
+    print (type(data))
     return data
 
 def getComplexTranscription(wordsCombination):
@@ -368,9 +459,6 @@ if PLAINTEXT:
                                         else:
                                             print ("\t" + transcriptions["verb"][5])
                                     elif word[-1] == "s":
-                                        # 'sses' at the end of the verb indicates he / she / it form.
-                                        # if word[-4:] == "sses":
-                                        #     print ("\t" + transcriptions["verb"][2])
                                         if word[-2:] == "ss":
                                             print ("\t" + transcriptions["verb"][1])
                                         else:
@@ -414,9 +502,6 @@ else:
                                 transcribed = transcriptions["verb"][5]
                             
                         elif word[-1] == "s":
-                            # 'sses' at the end of the verb indicates he / she / it form.
-                            # if word[-4:] == "sses":
-                            #     print ("\t" + transcriptions["verb"][2])
                             if word[-2:] == "ss":
                                 transcribed = transcriptions["verb"][1]
                             else:
