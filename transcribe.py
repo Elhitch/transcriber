@@ -158,7 +158,6 @@ class DictionaryParser(HTMLParser):
     def handle_data(self, data):
         if self.record == True:
             if self.recordType == 't':
-                print("DATA:", data)
                 self.type = data
             elif self.recordType == 'w':
                 self.found[self.type].append(data.strip('/'))
@@ -475,20 +474,12 @@ def getTranscription(wordToTranscribe, wordType=None):
                 for key in list(dictionary):
                     arrLocation = 0
                     for transcription in dictionary[key]:
-                        # print (dictionary, type(dictionary))
-                        # print (key, type(key))
-                        # print (transcription, type(transcription))
-                        #dictionary[key] = PREFIX_TRANSCRIPTIONS[prefix] + dictionary[key]
                         dictionary[key][arrLocation] = PREFIX_TRANSCRIPTIONS[prefix] + transcription
-                        print (dictionary[key][arrLocation])
                         arrLocation += 1
                     
 
         if (len(data) != 0):
             return data
-
-    # print (data)
-    # return data
 
 # If this is a complex word, e.g. inter-change, split the words, get transcriptions for each and merge the results
 def getComplexTranscription(wordsCombination):
@@ -607,7 +598,6 @@ else:
             for transcriptions in result:
                 for wordType in transcriptions:
                     transcribed = ""
-                    print(word + ' (' + wordType + ')')
                     if wordType == "verb":
                         if word[-3:] == "ing":
                             if syllableCount(word) == 1:
@@ -644,3 +634,4 @@ else:
 
     workbook.save(filename=FILENAME)
     workbook.close()
+    print ("All done - no problems encountered. Check the file you supplied (transcribe.xlsx by default).")
