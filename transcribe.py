@@ -5,10 +5,14 @@ import argparse
 import urllib3
 from html.parser import HTMLParser
 from openpyxl import load_workbook
+from re import split
 
 VERBOSE_DEBUG = False
 PLAINTEXT = False
 FILENAME = ""
+WORD_SEPARATORS = [" ", "-", "—", "/", "[", "]"]
+# The list below is unused due to issues with malformed output
+CHARACTERS_TO_STRIP = "'‘’"
 
 ###     TO DO   ###
 # - Mark output and note whether it follows British or American English transcription
@@ -19,7 +23,7 @@ FILENAME = ""
 ###      END    ###
 
 # The URL which is used to look up words
-baseURL = "https://www.oxfordlearnersdictionaries.com/definition/english/"
+baseURL = "https://www.oxfordlearnersdictionaries.com/search/english/?q="
 
 # List of fricatives, needed to form possessive transcriptions. Source: https://pronuncian.com/introduction-to-fricatives
 # Source 2 (not used): https://english.stackexchange.com/questions/5913/what-is-the-pronunciation-of-the-possessive-words-that-already-end-in-s
@@ -114,18 +118,50 @@ PREFIX_TRANSCRIPTIONS = {
     "under": "ˌʌndəˈ"
 }
 
+# Since OLD is limited in terms of these, the transcriptions below have been fetched from Wiktionary. Might be incorrect.
+CONTRACTIONS = {
+    "i've": "aɪv",
+    "you've": "juːv",
+    "we've": "wiːv",
+    "they've": "ðeɪv",
+    "i'll": "aɪl",
+    "you'll": "juːl",
+    "he'll": "hɪl",
+    "she'll": "ʃɪl",
+    "it'll": "ˈɪtl̩",
+    "we'll": "wɪl",
+    "they'll": "ðeɪl",
+    "i'm": "aɪm",
+    "you're": "jʊə(ɹ)",
+    "we're": "wɪə(ɹ)",
+    "they're": "ðɛə(ɹ)",
+    "i'd": "aɪd",
+    "you'd": "juːd",
+    "he'd": "hiːd",
+    "she'd": "ʃiːd",
+    "it'd": "ˈɪtəd",
+    "we'd": "wiːd",
+    "they'd": "ðeɪd"
+}
+
 class DictionaryParser(HTMLParser):
     def __init__(self):
         HTMLParser.__init__(self)
+        # Needed to differentiate between British English and American English transcriptions:
         self.isBritish = False
         self.record = False
         self.found = dict()
         self.counter = 0;
         self.type = ""
+        self.headWord = ""
+        self.notFound = False
+        self.recordError = False
 
         # Record type - remembers which of the following is being recorded:
         #   t - Type (noun / verb / adjective)
         #   w - Word
+        #   h - Head word
+        #   e - Error (Not Found)
         self.recordType = ''
 
     def handle_starttag(self, tag, attrs):
@@ -133,38 +169,54 @@ class DictionaryParser(HTMLParser):
             if tag == "span":
                 if attrs[0][0] == "class":
                     if attrs[0][1] == "phon":
-                        # If self.type doesn't exist, then the page relates to a name, for example: kiss - verb, noun, rock band
-                        if self.isBritish and self.type != "":
+                        if self.isBritish:
+                            if self.type == "":
+                                self.type = "unknown"
+                                self.found[self.type] = []
                             self.record = True
                             self.recordType = 'w'
                             self.isBritish = False
                     if attrs[0][1] == "pos":
                         self.record = True
                         self.recordType = 't'
-            if tag == "div":
-                if attrs[0][0] == "class":
-                    if attrs[0][1] == "phons_br":
-                        self.isBritish = True
+
+            elif tag == "div":
+                for attr in attrs:
+                    if attr[0] == "class":
+                        if attr[1] == "phons_br":
+                            self.isBritish = True
+                    elif attr[0] == "id":
+                        if attr[1] == "search-results":
+                            self.notFound = True
+                    
+            elif tag == "h1":
+                for attr in attrs:
+                    if attr[0] == "class":
+                        if attr[1] == "headword":
+                            self.record = True
+                            self.recordType = 'h'
 
     def handle_endtag(self, tag):
-        #print("Encountered an end tag :", tag)
         if self.record:
             self.record = False
             if self.recordType == 't':
+                if self.type == "" or self.type is None:
+                    self.type = "unknown"
                 self.found[self.type] = []
-            elif self.recordType == 'w':
-                pass
 
     def handle_data(self, data):
         if self.record == True:
             if self.recordType == 't':
-                self.type = data
+                self.type += data
             elif self.recordType == 'w':
                 self.found[self.type].append(data.strip('/'))
-                # print (data.strip('/'))
+            elif self.recordType == 'h':
+                self.headWord = data
+            elif self.recordType == 'e':
+                if "No exact match found" in data:
+                    self.notFound = True
 
 def syllableCount(word):
-    word = word.lower()
     count = 0
     if word[0] in VOWELS:
         count += 1
@@ -177,19 +229,46 @@ def syllableCount(word):
         count += 1
     return count
 
+def getKeysList(items):
+    keysList = list()
+    for key in items.keys():
+        keysList.append(key)
+    return keysList
+
 def getPluralOrThidPerson(type, word, items):
+    multipleItems = False
     lastChar = word[-1]
     lastTwoChars = word[-2:]
     if type == "verb":
-        pos = 2
+        lastTranscriptionChar = items[type][2][-1]
+        lastTwoTranscriptionChar = items[type][2][-2:]
+        if (lastChar in VOICELESS_CONSONANTS or lastTwoChars in VOICELESS_CONSONANTS) or \
+            (lastTranscriptionChar in VOICELESS_CONSONANTS or lastTwoTranscriptionChar in VOICELESS_CONSONANTS):
+            items[type][2] += "s"
+        # elif lastChar in FRICATIVE_SOUNDS:
+        #     items[type][pos] += "iz"
+        elif (lastChar in FRICATIVE_SOUNDS) or (lastTranscriptionChar in FRICATIVE_SOUNDS):
+            items[type][2] += "iz"
+        elif (lastChar in VOWELS or lastChar in VOICED_CONSONANTS or lastTwoChars in VOICED_CONSONANTS) or \
+                (lastTranscriptionChar in VOWELS or lastTranscriptionChar in VOICED_CONSONANTS or lastTwoTranscriptionChar in VOICED_CONSONANTS):
+            items[type][2] += "z"
     else:
         pos = 0
-    if lastChar in VOICELESS_CONSONANTS or lastTwoChars in VOICELESS_CONSONANTS:
-        items[type][pos] += "s"
-    elif lastChar in FRICATIVE_SOUNDS:
-        items[type][pos] += "iz"
-    elif lastChar in VOWELS or lastChar in VOICED_CONSONANTS or lastTwoChars in VOICED_CONSONANTS:
-        items[type][pos] += "z"
+        for item in items[type]:
+            lastTranscriptionChar = items[type][pos][-1]
+            lastTwoTranscriptionChar = items[type][pos][-2:]
+            if (lastChar in VOICELESS_CONSONANTS or lastTwoChars in VOICELESS_CONSONANTS) or \
+                (lastTranscriptionChar in VOICELESS_CONSONANTS or lastTwoTranscriptionChar in VOICELESS_CONSONANTS):
+                items[type][pos] += "s"
+            # elif lastChar in FRICATIVE_SOUNDS:
+            #     items[type][pos] += "iz"
+            elif (lastChar in FRICATIVE_SOUNDS) or (lastTranscriptionChar in FRICATIVE_SOUNDS):
+                items[type][pos] += "iz"
+            elif (lastChar in VOWELS or lastChar in VOICED_CONSONANTS or lastTwoChars in VOICED_CONSONANTS) or \
+                    (lastTranscriptionChar in VOWELS or lastTranscriptionChar in VOICED_CONSONANTS or lastTwoTranscriptionChar in VOICED_CONSONANTS):
+                items[type][pos] += "z"
+            pos += 1
+            
     return items
 
 def getTranscription(wordToTranscribe, wordType=None):
@@ -262,8 +341,6 @@ def getTranscription(wordToTranscribe, wordType=None):
 
             elif prefix_under:
                 word = word[5:]
-
-        # print ("ITERATION WORD:", word, "ITERATION:", prefixIteration)
         
         # First, check if the word is present in the list of irregular verbs and, if so, return it.
         for irregular_verb in IRREGULAR_VERBS:
@@ -282,58 +359,40 @@ def getTranscription(wordToTranscribe, wordType=None):
                 data.append(transcription)
                 return data
 
-        # Otherwise, start querying the Oxford Learner's Dictionaries.
-        iterateURLs = True
-        iteration_URL = 1
-        iteration = 1
+        # If not, check if it's a contraction and get the actual determiner - the verb is added later.
+        for contraction in CONTRACTIONS:
+            if word == contraction:
+                returnDict = dict()
+                returnDict["determiner, contraction"] = list()
+                returnDict["determiner, contraction"].append(CONTRACTIONS[contraction])
+                data.append(returnDict)
+                return data
 
-        hasNoun = False
-        notInWord = False
-        endsInS = False
+        # Start querying the Oxford Learner's Dictionaries.
+
         isPossessive = False
         isPluralOrThirdPerson = False
-        endsInIng = False
-        truncatedIng = False
-        stopIterating = False
-        syllables = syllableCount(word)
-        isPastTense = False      
-        doneExchange = False
 
-        if "n't" in word:
-            word = word[:-3]
-            notInWord = True
-
-        elif word[-2:] == "'s" or word[-2:] == "’s":
+        if word[-2:] == "'s" or word[-2:] == "’s":
             word = word[:-2]
             isPossessive = True
-
         elif word[-4:] == "sses":
-            word = word[:-2]
             isPluralOrThirdPerson = True
-
         elif word[-1] == "s" and word[-4:] != "ness":
-            endsInS = True
             isPluralOrThirdPerson = True
-            if word[-3:] == "ies":
-                word = word[:-3] + 'y'
         
-        elif word[-2:] == "ed":
-            word = word [:-1]
-            isPastTense = True
-
-        # If the words ends in 'ing', mark it down. This should be mainly used for present continuous form of verbs,
-        # but there might be some false positives which are checked later on - such as "bring".
-        elif word[-3:] == "ing":
-            endsInIng = True
+        iterateURLs = True
+        iteration = 1
 
         try:
             http = urllib3.PoolManager()
-            URL = baseURL + word.strip()
-            if VERBOSE_DEBUG: print ("[*] [DEBUG] URL:", URL)
+            
+            # if VERBOSE_DEBUG: print ("[*] [DEBUG] URL:", URL)
             
             # If the word doesn't have any homonyms, only look through the content on this page.
             # Otherwise, keep iterating until the server returns "Not Found".
             while iterateURLs:
+                URL = baseURL + word.strip()
                 if VERBOSE_DEBUG: 
                     print ("---- NEW ITERATION -", iteration, "----")
                     print ("[*] [DEBUG] Word:", word)
@@ -341,105 +400,51 @@ def getTranscription(wordToTranscribe, wordType=None):
                 openURL = http.request("GET", URL)
                 if VERBOSE_DEBUG: print ("[*] [DEBUG] Opening URL:", URL)
                 redirectedURL = openURL.geturl()
+                if VERBOSE_DEBUG: print ("[*] [DEBUG] Redirecting to URL:", redirectedURL)
 
                 if openURL.status == 200:
+                    if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status 200")
                     parser.feed(openURL.data.decode())
-                elif openURL.status == 404:
                     iterateURLs = False
+                    if parser.notFound:
+                        if word[-1] == 's':
+                            isPluralOrThirdPerson = True
+                            word = word[:-1]
+                            iterateURLs = True
+                elif openURL.status == 404:
+                    if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status 404")
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] URL", URL, "returned HTTP 404.")
+                    iterateURLs = False
                 else:
-                    print("An error occurred.")
+                    if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status", openURL.status, "- Stopping iterations")
+                    else: print("An error occurred.")
+                    iterateURLs = False
 
-                # If the word is the only thing displayed in the URL after the last slash, then that's the only match
-                # so the script stops iterating.
-                redirectedWord = redirectedURL.split("/")[-1]
-                if redirectedWord == word:
-                    if VERBOSE_DEBUG: print ("[*] [DEBUG] Redirected URL:", redirectedURL)
-                    # If a match wasn't found and the word ends in 'ing', it's a verb.
-                    # Try to get the root form of the verb and search based on it.
-                    # Source: https://web2.uvcs.uvic.ca/courses/elc/sample/beginner/gs/gs_53.htm
-                    if endsInIng and not truncatedIng:
-                        baseWord = word[:-3]
-                        #print(syllableCount(baseWord), baseWord[-3], baseWord[-2])
-                        if baseWord[-1] == baseWord[-2] and syllables == 1:
-                            baseWord = baseWord[:-1]
-                        elif baseWord[-2] in VOWELS and ((baseWord[-1] in VOICED_CONSONANTS) or (baseWord[-1] in VOICELESS_CONSONANTS)):
-                            baseWord += 'e'
-                        URL = baseURL + baseWord
-                        iterateURLs = True
-                        truncatedIng = True
-                        # print (word)
-                    elif endsInS:
-                        word = word[:-1]
-                        URL = baseURL + word
-                        print ("New URL: ", URL)
-                        if ((syllables == 1 and iteration > 1) or iteration > 2):
-                            iterateURLs = False
-                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to exceeded iteration limit.")
-                        else:
-                            iterateURLs = True
-                    elif isPastTense:
-                        word = word[:-1]
-                        URL = baseURL + word
-                        print ("New URL: ", URL)
-                        if iteration > 0 and not doneExchange:
-                            if not doneExchange and word[-1] == 'i':
-                                word = word[:-1] + 'y'
-                                URL = baseURL + word
-                                doneExchange = True
-                                iterateURLs = True
-                            elif iteration == 1:
-                                iterateURLs = True
-                            else:
-                                iterateURLs = False
-                                if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to exceeded iteration limit.")
-                            print (word, iteration)
-                        else:
-                            iterateURLs = True
-                    else:
-                        iterateURLs = False
-                        if VERBOSE_DEBUG: print ("[*] [DEBUG] Stopped iterating due to no more possible matches.")
-                else:
-                    if endsInIng and truncatedIng:
-                        if redirectedWord[-1] == 'e':
-                            URL = baseURL + redirectedWord[:-1]
-                            iterateURLs = True
-                        elif redirectedURL[-1].isdigit() and openURL.status != 404:
-                            iterateURLs = True
-                            URL = redirectedURL[:-1] + str(int(redirectedURL[-1]) + 1)
-                        else:
-                            iterateURLs = False
-                            if VERBOSE_DEBUG:
-                                print ("[*] [DEBUG] Stopping iterations - there don't seem to be anymore matches.")
-                    else:
-                        if VERBOSE_DEBUG: print ("[*] [DEBUG] NO MATCH DETECTED. URL:", redirectedURL, "\r\nWord:", word)
-                        iteration_URL += 1
-                        URL = redirectedURL[:-1] + str(iteration_URL)
-                        if VERBOSE_DEBUG:
-                            print ("[*] [DEBUG] TRYING TO REDIRECT TO:", URL)
-                            print ("[*] [DEBUG] ITERATION STATUS:", iterateURLs)
-                
                 if bool(parser.found) != False:
                     items = parser.found
-                    if "verb" in items:
-                        if notInWord:
-                            counter = 0
-                            for item in items:
-                                items[counter] = items[counter] + "n̩t"
-                                counter = counter + 1
-                            data.append(items)
+                    if "noun" in items:
+                        if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
+                            data.append(getPluralOrThidPerson("noun", parser.headWord, items))
+                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
+                        # elif word != parser.headWord:
+                        #     pass
+                        #     print ("Words are not equal")
                         else:
                             data.append(items)
-                    # If the word ends in 's', append the corresponding form. Source: https://english.stackexchange.com/a/23528
-                    elif "noun" in items:
-                        hasNoun = True
-                        if isPossessive or isPluralOrThirdPerson:
-                            endsInS = False
-                            data.append(getPluralOrThidPerson("noun", word, items))
+                    elif "adjective" in items:
+                        if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
+                            data.append(getPluralOrThidPerson("adjective", parser.headWord, items))
+                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
                         else:
                             data.append(items)
-                    else:
+                    elif "verb" in items:
                         data.append(items)
+                    else:
+                        if isPluralOrThirdPerson:
+                            data.append(getPluralOrThidPerson(getKeysList(items)[0], parser.headWord, items))
+                        else:
+                            data.append(items)
+                
                 if VERBOSE_DEBUG: print ("---- END ITERATION -", iteration, "----")
                 iteration += 1
                 parser.close()
@@ -449,26 +454,6 @@ def getTranscription(wordToTranscribe, wordType=None):
             print ("Arguments", e.args)
             print ("Exception txt:", e)
 
-        if VERBOSE_DEBUG: print ("[*] [DEBUG]", data)
-        #print ("noun" in data)
-        if (endsInS or isPluralOrThirdPerson) and data is not None and hasNoun:
-            for dictionary in data:
-                for key in list(dictionary):
-                    if key != "noun" and key != "verb":
-                        print ("Deleting:", dictionary[key])
-                        del dictionary[key]
-        
-        # The line below caused words ending in "ing" to produce unexpected results. For example:
-        # Input - targeting; output - "targeting (noun) ˈtɑːɡɪt" and "targeting (verb) ˈtɑːɡɪtɪŋ"
-        # The changes are not yet confirmed to work as expected.
-
-        # elif isPastTense or (endsInIng and not truncatedIng):
-        elif isPastTense or endsInIng:
-            for dictionary in data:
-                for key in list(dictionary):
-                    if key != "verb":
-                        del dictionary[key]
-
         if prefixIteration == 1:
             for dictionary in data:
                 for key in list(dictionary):
@@ -476,25 +461,68 @@ def getTranscription(wordToTranscribe, wordType=None):
                     for transcription in dictionary[key]:
                         dictionary[key][arrLocation] = PREFIX_TRANSCRIPTIONS[prefix] + transcription
                         arrLocation += 1
-                    
 
         if (len(data) != 0):
+            if VERBOSE_DEBUG: print ("[*] [DEBUG] Returning", data)
             return data
+        else:
+            if VERBOSE_DEBUG: print ("[*] [DEBUG] Got no data to return")
 
 # If this is a complex word, e.g. inter-change, split the words, get transcriptions for each and merge the results
 def getComplexTranscription(wordsCombination):
-    words = wordsCombination.split('-')
+    data = getTranscription(wordsCombination)
+    if (data != None):
+        for dictionary in data:
+            for key in dictionary:
+                for element in dictionary[key]:
+                    return element
+
+    # words = wordsCombination.split('-')
+    words = split(" |-|—|/|\[|\]", wordsCombination)
     endResult = dict()
     tempArray = ""
     for word in words:
         data = getTranscription(word)
+        # print ("RECEIVED:", data, "FOR WORD", word)
         for dictionary in data:
             for key in dictionary:
-                for element in dictionary[key]:
-                    if key != "verb":
-                        tempArray += element
-                        tempArray += " "
+                # for element in dictionary[key]:
+                if key == "verb":
+                    if word[-3:] == "ing":
+                        if syllableCount(word) == 1:
+                            tempArray += dictionary["verb"][0]
+                        else:
+                            if dictionary["verb"][-1][-2:] == "ɪŋ":
+                                tempArray += dictionary["verb"][-1] + " "
+                            elif dictionary["verb"][-2][-2:] == "ɪŋ":
+                                tempArray += dictionary["verb"][-2] + " "
+                            else:
+                                for transcription in dictionary["verb"]:
+                                    if transcription[-2:] == "ɪŋ":
+                                        tempArray += transcription + " "
+                    elif word[-1] == "s":
+                        if word[-2:] == "ss":
+                            tempArray += dictionary["verb"][1] + " "
+                        else:
+                            tempArray += dictionary["verb"][2] + " "
+                    elif word[-2:] == "ed":
+                        tempArray += dictionary["verb"][3] + " "
+                    else:
+                        tempArray += dictionary["verb"][1] + " "
+                else:
+                    tempArray += dictionary[key][0] + " "
+                    break
     return tempArray.rstrip()
+
+def updateProgress(thisWord, totalWords, word, errorCount):
+    percentage = ("%.2f" % ((thisWord / totalWords) * 100))
+    sys.stdout.write("\rProgress: {0}/{1} ({2}%) ||| Errors: {3} ||| Current word is: {4}".format(thisWord, totalWords, percentage, errorCount, word))
+    sys.stdout.flush()
+    sys.stdout.write("\033[K")
+    sys.stdout.flush()
+    if (thisWord == totalWords):
+        print ("\r\n")
+    return
 
 # Check if the file provided via argument is a valid file.
 def is_valid_file(parser, arg):
@@ -532,106 +560,127 @@ elif FILENAME[-3:] == "xls" or FILENAME[-4:] == "xlsx" and PLAINTEXT:
 if PLAINTEXT:
     with open(FILENAME, 'r') as file:
         for word in file:
-            # Ignore commented words
-            if word[0] != '#':
-                word = word.strip()
-                if word != '':
-                    complex = False
-                    if '-' in word:
-                        result = getComplexTranscription(word)
-                        print (word, "(complex)")
-                        print ("\t" + result)
-                    else:
-                        if "n't" not in word and "'ll" not in word and "'s" not in word:
-                            word = word.replace("'", '-').lower()
-                        else:
+            try:
+                # Ignore commented words
+                if word[0] != '#':
+                    word = word.strip()
+                    word = word.replace("’", "'")
+                    if word != '':
+                        shouldContinue = True
+                        complex = False
+                        for separator in WORD_SEPARATORS:
+                            if separator in word:
+                                result = getComplexTranscription(word)
+                                print (word, "(complex)")
+                                print ("\t" + result)
+                                shouldContinue = False
+                        if shouldContinue:
+                            # if "n't" not in word and "'ll" not in word and "'s" not in word:
+                            #     word = word.replace("'", '-')
                             word = word.lower()
-                        result = getTranscription(word)
-                        for transcriptions in result:
-                            for wordType in transcriptions:
-                                print(word + ' (' + wordType + ')')
-                                if wordType == "verb":
-                                    if word[-3:] == "ing":
-                                        if syllableCount(word) == 1:
-                                            print ("\t" + transcriptions["verb"][0])
-                                        else:
-                                            if transcriptions["verb"][-1][-2:] == "ɪŋ":
-                                                print ("\t" + transcriptions["verb"][-1])
-                                            elif transcriptions["verb"][-2][-2:] == "ɪŋ":
-                                                print ("\t" + transcriptions["verb"][-2])
+                            result = getTranscription(word)
+                            for transcriptions in result:
+                                for wordType in transcriptions:
+                                    print(word + ' (' + wordType + ')')
+                                    if wordType == "verb":
+                                        if word[-3:] == "ing":
+                                            if syllableCount(word) == 1:
+                                                print ("\t" + transcriptions["verb"][0])
                                             else:
-                                                for transcription in transcriptions["verb"]:
-                                                    if transcription[-2:] == "ɪŋ":
-                                                        print ("\t" + transcription)
-                                    elif word[-1] == "s":
-                                        if word[-2:] == "ss":
-                                            print ("\t" + transcriptions["verb"][1])
+                                                if transcriptions["verb"][-1][-2:] == "ɪŋ":
+                                                    print ("\t" + transcriptions["verb"][-1])
+                                                elif transcriptions["verb"][-2][-2:] == "ɪŋ":
+                                                    print ("\t" + transcriptions["verb"][-2])
+                                                else:
+                                                    for transcription in transcriptions["verb"]:
+                                                        if transcription[-2:] == "ɪŋ":
+                                                            print ("\t" + transcription)
+                                        elif word[-1] == "s":
+                                            if word[-2:] == "ss":
+                                                print ("\t" + transcriptions["verb"][1])
+                                            else:
+                                                print ("\t" + transcriptions["verb"][2])
+                                        elif word[-2:] == "ed":
+                                            print ("\t" + transcriptions["verb"][3])
                                         else:
-                                            print ("\t" + transcriptions["verb"][2])
-                                    elif word[-2:] == "ed":
-                                        print ("\t" + transcriptions["verb"][3])
+                                            print ("\t" + transcriptions["verb"][1])
                                     else:
-                                        print ("\t" + transcriptions["verb"][1])
-                                else:
-                                    for transcription in transcriptions[wordType]:
-                                        print("\t" + transcription)
+                                        for transcription in transcriptions[wordType]:
+                                            print("\t" + transcription)
+            except Exception as e:
+                print ("An error occurred at word \"{0}\". Message: {1}".format(word, e))
 else:
     workbook = load_workbook(filename=FILENAME)
     sheet = workbook.active
+    totalWords = sheet.max_row
     i = 1
+    errorCount = 0
     rPos = "A" + str(1)
     wPos = "B" + str(1)
     while sheet[rPos].value != None:
+        shouldContinue = True
         word = sheet[rPos].value
         word = word.strip()
+        word = word.replace("’", "'")
+        updateProgress(i, totalWords, word, errorCount)
+        if (i % 50 == 0):
+            workbook.save(filename=FILENAME)
         complex = False
-        if '-' in word:
-            result = getComplexTranscription(word)
-            print (word, "(complex)")
-            print ("\t" + result)
-        else:
-            if "n't" not in word and "'ll" not in word and "'s" not in word:
-                word = word.replace("'", '-').lower()
-            else:
-                word = word.lower()
-            result = getTranscription(word)
-            for transcriptions in result:
-                for wordType in transcriptions:
-                    transcribed = ""
-                    if wordType == "verb":
-                        if word[-3:] == "ing":
-                            if syllableCount(word) == 1:
-                                transcribed = transcriptions["verb"][0]
-                            else:
-                                if transcriptions["verb"][-1][-2:] == "ɪŋ":
-                                    transcribed = transcriptions["verb"][-1]
-                                elif transcriptions["verb"][-2][-2:] == "ɪŋ":
-                                    transcribed = transcriptions["verb"][-2]
-                                else:
-                                    for transcription in transcriptions["verb"]:
-                                        if transcription[-2:] == "ɪŋ":
-                                            transcribed = transcription
-                            
-                        elif word[-1] == "s":
-                            if word[-2:] == "ss":
-                                transcribed = transcriptions["verb"][1]
-                            else:
-                                transcribed = transcriptions["verb"][2]
-                        elif word[-2:] == "ed":
-                            transcribed = transcriptions["verb"][3]
-                        else:
-                            transcribed = transcriptions["verb"][1]
-                    else:
-                        for transcription in transcriptions[wordType]:
-                            if transcription != "":
-                                transcribed = "\r\n" + transcription
-                    # print ("Before writing:", transcribed)
-                    sheet[wPos] = transcribed
+        try:
+            for separator in WORD_SEPARATORS:
+                if separator in word:
+                    result = getComplexTranscription(word)
+                    sheet[wPos] = result
                     wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
+                    shouldContinue = False
+            if shouldContinue:
+                # if "n't" not in word and "'ll" not in word and "'s" not in word:
+                #     word = word.replace("'", '-')
+                word = word.lower()
+                result = getTranscription(word)
+                for transcriptions in result:
+                    for wordType in transcriptions:
+                        transcribed = ""
+                        if wordType == "verb":
+                            if word[-3:] == "ing":
+                                if syllableCount(word) == 1:
+                                    transcribed = transcriptions["verb"][0]
+                                else:
+                                    if transcriptions["verb"][-1][-2:] == "ɪŋ":
+                                        transcribed = transcriptions["verb"][-1]
+                                    elif transcriptions["verb"][-2][-2:] == "ɪŋ":
+                                        transcribed = transcriptions["verb"][-2]
+                                    else:
+                                        for transcription in transcriptions["verb"]:
+                                            if transcription[-2:] == "ɪŋ":
+                                                transcribed = transcription
+                                
+                            elif word[-1] == "s":
+                                if word[-2:] == "ss":
+                                    transcribed = transcriptions["verb"][1]
+                                else:
+                                    transcribed = transcriptions["verb"][2]
+                            elif word[-2:] == "ed":
+                                transcribed = transcriptions["verb"][3]
+                            else:
+                                transcribed = transcriptions["verb"][1]
+                        else:
+                            for transcription in transcriptions[wordType]:
+                                if transcription != "":
+                                    transcribed = "\r\n" + transcription
+                        # print ("Before writing:", transcribed)
+                        sheet[wPos] = transcribed
+                        wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
+        except Exception as e:
+            errorCount += 1
+        
         i += 1
         rPos = "A" + str(i)
         wPos = "B" + str(i)
 
     workbook.save(filename=FILENAME)
     workbook.close()
-    print ("All done - no problems encountered. Check the file you supplied (transcribe.xlsx by default).")
+    if (errorCount > 0):
+        print ("Finished with {0} errors. Check the file you supplied (transcribe.xlsx by default).".format(errorCount))
+    else:
+        print ("All done - no problems encountered. Check the file you supplied (transcribe.xlsx by default).")
