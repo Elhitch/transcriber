@@ -437,14 +437,15 @@ def getTranscription(wordToTranscribe, wordType=None):
 
                 if bool(parser.found) != False:
                     items = parser.found
-
-                    # if addTranscriptionEr:
-                    #     changeItems = getKeysList(items)
-                    #     for i in range(len(changeItems[0])):
-                    #         if items[changeItems[0]][i][-3:] == "(r)":
-                    #             items[changeItems[0]][i] = items[changeItems[0]][i][:-3] + "r"
-                    #         items[changeItems[0]][i] += "ə(r)"
-                    #     data.append(items)
+                    
+                    if addTranscriptionEr:
+                        print ("Got items:", items)
+                        changeItems = getKeysList(items)
+                        for i in range(len(changeItems[0])):
+                            if items[changeItems[0]][i][-3:] == "(r)":
+                                items[changeItems[0]][i] = items[changeItems[0]][i][:-3] + "r"
+                            items[changeItems[0]][i] += "ə(r)"
+                        print ("Items out:", items)
                     
                     if "noun" in items:
                         if iteration == 1 and isPluralOrThirdPerson and parser.headWord == word:
@@ -485,7 +486,9 @@ def getTranscription(wordToTranscribe, wordType=None):
                         else:
                             data.append(items)
                 
-                if VERBOSE_DEBUG: print ("---- END ITERATION -", iteration, "----")
+                if VERBOSE_DEBUG: 
+                    print ("[*] DEBUG Data so far:", data)
+                    print ("---- END ITERATION -", iteration, "----")
                 iteration += 1
                 parser.close()
         except Exception as e:
