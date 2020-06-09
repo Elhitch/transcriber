@@ -439,13 +439,11 @@ def getTranscription(wordToTranscribe, wordType=None):
                     items = parser.found
                     
                     if addTranscriptionEr:
-                        print ("Got items:", items)
                         changeItems = getKeysList(items)
                         for i in range(len(changeItems[0])):
                             if items[changeItems[0]][i][-3:] == "(r)":
                                 items[changeItems[0]][i] = items[changeItems[0]][i][:-3] + "r"
                             items[changeItems[0]][i] += "ə(r)"
-                        print ("Items out:", items)
                     
                     if "noun" in items:
                         if iteration == 1 and isPluralOrThirdPerson and parser.headWord == word:
