@@ -441,8 +441,6 @@ def getTranscription(wordToTranscribe, wordType=None):
                     if addTranscriptionEr:
                         changeItems = getKeysList(items)
                         for i in range(len(changeItems[0])):
-                            if items[changeItems[0]][i][-3:] == "(r)":
-                                items[changeItems[0]][i] = items[changeItems[0]][i][:-3] + "r"
                             items[changeItems[0]][i] += "ə(r)"
                     
                     if "noun" in items:
@@ -698,7 +696,7 @@ else:
                             else:
                                 for transcription in transcriptions[wordType]:
                                     if transcription != "":
-                                        transcribed = "\r\n" + transcription
+                                        transcribed = transcription
                             sheet[wPos] = transcribed
                             wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
             except Exception as e:
