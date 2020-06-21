@@ -694,7 +694,6 @@ else:
                                         wPos = nextColumn(wPos[0]) + str(row)
             except Exception as e:
                 errorCount += 1
-                print (e)
         else:
             if not VERBOSE_DEBUG:
                 updateProgress(row, totalWords, "*skipped*", errorCount)
