@@ -14,13 +14,6 @@ WORD_SEPARATORS = [" ", "-", "—", "/", "[", "]"]
 # The list below is unused due to issues with malformed output
 CHARACTERS_TO_STRIP = "\r\n'‘’ "
 
-###     TO DO   ###
-# - Mark output and note whether it follows British or American English transcription
-# - Add a list to the script containing all irregular verbs for easy lookup: https://myefe.com/english-irregular-verbs
-# - "cannabis" returns "ˈkænəbɪsiz", "checkers"	returns "ˈtʃekəziz". This might be an issue with all verbs ending with "s"
-# 
-###      END    ###
-
 # The URL which is used to look up words
 baseURL = "https://www.oxfordlearnersdictionaries.com/search/english/?q="
 
@@ -92,12 +85,6 @@ IRREGULAR_VERBS = {
     "typewrite": "taɪpraɪt",
     "typewrote": "taɪprəʊt",
     "typewritten": "taɪprɪtn",
-    # "unbent": "ˌʌnˈbent",
-    # "unbind": "ˌʌnbaɪnd",
-    # "unbound": "ˌʌnbaʊnd",
-    # "unclothe": "ˌʌnkləʊð",
-    # "unclothed": "ˌʌnkləʊðd",
-    # "unclad": "ˌʌnklæd",
     "waylaid": "weɪˈleɪd",
     "withdraw": "wɪðˈdrɔː",
     "withdrew": "wɪðˈdruː",
@@ -186,9 +173,11 @@ class DictionaryParser(HTMLParser):
                     if attr[0] == "class":
                         if attr[1] == "phons_br":
                             self.isBritish = True
+                            break
                     elif attr[0] == "id":
                         if attr[1] == "search-results":
                             self.notFound = True
+                            break
                     
             elif tag == "h1":
                 for attr in attrs:
@@ -196,6 +185,7 @@ class DictionaryParser(HTMLParser):
                         if attr[1] == "headword":
                             self.record = True
                             self.recordType = 'h'
+                            break
 
     def handle_endtag(self, tag):
         if self.record:
@@ -231,7 +221,7 @@ def syllableCount(word):
     return count
 
 def getKeysList(items):
-    keysList = list()
+    keysList = []
     for key in items.keys():
         keysList.append(key)
     return keysList
@@ -240,31 +230,19 @@ def getPluralOrThirdPerson(type, word, items):
     multipleItems = False
     lastChar = word[-1]
     lastTwoChars = word[-2:]
-    if type == "verb":
-        lastTranscriptionChar = items[type][2][-1]
-        lastTwoTranscriptionChar = items[type][2][-2:]
+    pos = 0
+    for item in items[type]:
+        lastTranscriptionChar = items[type][pos][-1]
+        lastTwoTranscriptionChar = items[type][pos][-2:]
         if (lastChar in VOICELESS_CONSONANTS or lastTwoChars in VOICELESS_CONSONANTS) or \
             (lastTranscriptionChar in VOICELESS_CONSONANTS or lastTwoTranscriptionChar in VOICELESS_CONSONANTS):
-            items[type][2] += "s"
+            items[type][pos] += "s"
         elif (lastChar in FRICATIVE_SOUNDS) or (lastTranscriptionChar in FRICATIVE_SOUNDS):
-            items[type][2] += "iz"
+            items[type][pos] += "iz"
         elif (lastChar in VOWELS or lastChar in VOICED_CONSONANTS or lastTwoChars in VOICED_CONSONANTS) or \
                 (lastTranscriptionChar in VOWELS or lastTranscriptionChar in VOICED_CONSONANTS or lastTwoTranscriptionChar in VOICED_CONSONANTS):
-            items[type][2] += "z"
-    else:
-        pos = 0
-        for item in items[type]:
-            lastTranscriptionChar = items[type][pos][-1]
-            lastTwoTranscriptionChar = items[type][pos][-2:]
-            if (lastChar in VOICELESS_CONSONANTS or lastTwoChars in VOICELESS_CONSONANTS) or \
-                (lastTranscriptionChar in VOICELESS_CONSONANTS or lastTwoTranscriptionChar in VOICELESS_CONSONANTS):
-                items[type][pos] += "s"
-            elif (lastChar in FRICATIVE_SOUNDS) or (lastTranscriptionChar in FRICATIVE_SOUNDS):
-                items[type][pos] += "iz"
-            elif (lastChar in VOWELS or lastChar in VOICED_CONSONANTS or lastTwoChars in VOICED_CONSONANTS) or \
-                    (lastTranscriptionChar in VOWELS or lastTranscriptionChar in VOICED_CONSONANTS or lastTwoTranscriptionChar in VOICED_CONSONANTS):
-                items[type][pos] += "z"
-            pos += 1
+            items[type][pos] += "z"
+        pos += 1
             
     return items
 
@@ -347,7 +325,7 @@ def getTranscription(wordToTranscribe, wordType=None):
         for irregular_verb in IRREGULAR_VERBS:
             if irregular_verb == word:
                 transcription = dict()
-                transcription["verb"] = list()
+                transcription["verb"] = []
                 # Because the part of the script that takes out the results looks at the second item in the list, there should be a placeholder.
                 transcription["verb"].append(None)
                 
@@ -371,6 +349,7 @@ def getTranscription(wordToTranscribe, wordType=None):
 
         # Start querying the Oxford Learner's Dictionaries.
 
+        # The next lines check for special conditions.
         isPossessive = False
         isPluralOrThirdPerson = False
         endsInLy = False
@@ -394,8 +373,7 @@ def getTranscription(wordToTranscribe, wordType=None):
         try:
             http = urllib3.PoolManager()
 
-            # If the word doesn't have any homonyms, only look through the content on this page.
-            # Otherwise, keep iterating until the server returns "Not Found".
+            # Normally, only a single iteration is expected. This might change if special conditions, as defined above, exist.
             while iterateURLs:
                 URL = baseURL + word.strip()
                 if VERBOSE_DEBUG: 
@@ -406,14 +384,15 @@ def getTranscription(wordToTranscribe, wordType=None):
                 if VERBOSE_DEBUG: print ("[*] [DEBUG] Opening URL:", URL)
                 redirectedURL = openURL.geturl()
                 if VERBOSE_DEBUG: print ("[*] [DEBUG] Redirecting to URL:", redirectedURL)
-
+                    
                 if openURL.status == 200:
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status 200")
                     parser.feed(openURL.data.decode())
                     iterateURLs = False
+                    # Even though a query fails to find a word, HTTP 200 is returned. This means that either the word doesn't exist
+                    # or that further local processing is required related to special conditions.
                     if parser.notFound:
                         if word[-1] == 's':
-                            # isPluralOrThirdPerson = True
                             word = word[:-1]
                             iterateURLs = True
                         elif endsInLy:
@@ -426,73 +405,77 @@ def getTranscription(wordToTranscribe, wordType=None):
                             iterateURLs = True
                             endsInEr = False
                             addTranscriptionEr = True
+
+                    if bool(parser.found) and not parser.notFound:
+                        items = parser.found
+                        
+                        if addTranscriptionEr:
+                            changeItems = getKeysList(items)
+                            for i in range(len(changeItems[0])):
+                                items[changeItems[0]][i] += "ə(r)"
+                        
+                        if "noun" in items:
+                            if iteration == 1 and isPluralOrThirdPerson and parser.headWord == word:
+                                data.append(items)
+                            elif isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
+                                data.append(getPluralOrThirdPerson("noun", parser.headWord, items))
+                                if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
+                            else:
+                                data.append(items)
+                        elif "adjective" in items:
+                            if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
+                                data.append(getPluralOrThirdPerson("adjective", parser.headWord, items))
+                                if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
+
+                            # https://youglish.com/pronounce/busiest/english offers different transcriptions for -er and -est.
+                            elif parser.headWord[:-1] in word and parser.headWord != word:
+                                if word[-2:] == "er":
+                                    for key in items:
+                                        items["adjective"][0] += "ə"
+                                elif word[-3:] == "est":
+                                    for item in items["adjective"]:
+                                        items["adjective"][0] += "ɪst"
+                                data.append(items)
+                            elif addTranscriptionLy:
+                                for i in range(len(items["adjective"])):
+                                    items["adjective"][i] += "lɪ"
+                                data.append(items)
+                            else:
+                                data.append(items)
+                        elif "verb" in items:
+                            data.append(items)
+                        else:
+                            if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
+                                data.append(getPluralOrThirdPerson(getKeysList(items)[0], parser.headWord, items))
+                                if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
+                            else:
+                                data.append(items)
+                
+                    if VERBOSE_DEBUG: 
+                        print ("[*] [DEBUG] Data so far:", data)
+                        print ("---- END ITERATION -", iteration, "----")
+                    iteration += 1
+                    parser.close()
+
+                # If a word is not found however, there's nothing else to do.
                 elif openURL.status == 404:
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status 404")
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] URL", URL, "returned HTTP 404.")
                     iterateURLs = False
+                # A different status code could mean anything so the script stops checkinf for this word.
                 else:
                     if VERBOSE_DEBUG: print ("[*] [DEBUG] Got status", openURL.status, "- Stopping iterations")
                     else: print("An error occurred.")
                     iterateURLs = False
-
-                if bool(parser.found) != False:
-                    items = parser.found
-                    
-                    if addTranscriptionEr:
-                        changeItems = getKeysList(items)
-                        for i in range(len(changeItems[0])):
-                            items[changeItems[0]][i] += "ə(r)"
-                    
-                    if "noun" in items:
-                        if iteration == 1 and isPluralOrThirdPerson and parser.headWord == word:
-                            data.append(items)
-                        elif isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
-                            data.append(getPluralOrThirdPerson("noun", parser.headWord, items))
-                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
-                        else:
-                            data.append(items)
-                    elif "adjective" in items:
-                        if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
-                            data.append(getPluralOrThirdPerson("adjective", parser.headWord, items))
-                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
-
-                        # https://youglish.com/pronounce/busiest/english offers a different transcription for -er and -est.
-                        elif parser.headWord[:-1] in word and parser.headWord != word:
-                            if word[-2:] == "er":
-                                for key in items:
-                                    items["adjective"][0] += "ə"
-                            elif word[-3:] == "est":
-                                for item in items["adjective"]:
-                                    items["adjective"][0] += "ɪst"
-                            data.append(items)
-                        elif addTranscriptionLy:
-                            for i in range(len(items["adjective"])):
-                                items["adjective"][i] += "lɪ"
-                            data.append(items)
-                        else:
-                            data.append(items)
-                    elif "verb" in items:
-                        data.append(items)
-                    else:
-                        if isPossessive or (word[-1] == 's' and word != parser.headWord) or isPluralOrThirdPerson:
-                            data.append(getPluralOrThirdPerson(getKeysList(items)[0], parser.headWord, items))
-                            if VERBOSE_DEBUG: print ("[*] [DEBUG] Word is possessive or plural, getting transcription...")
-                        elif isPluralOrThirdPerson:
-                            data.append(getPluralOrThirdPerson(getKeysList(items)[0], parser.headWord, items))
-                        else:
-                            data.append(items)
                 
-                if VERBOSE_DEBUG: 
-                    print ("[*] DEBUG Data so far:", data)
-                    print ("---- END ITERATION -", iteration, "----")
-                iteration += 1
-                parser.close()
         except Exception as e:
             print ("Something went wrong, check the following details for more information:")
             print ("Exception Type:", type(e))
             print ("Arguments", e.args)
             print ("Exception txt:", e)
 
+        # If the requested word is found to have a prefix and this is the second iteration, this means that the word was earlier split
+        # so the prefix transcription has to be added now.
         if prefixIteration == 1:
             for dictionary in data:
                 for key in list(dictionary):
@@ -517,13 +500,13 @@ def getComplexTranscription(wordsCombination):
                     for element in dictionary[key]:
                         return element
 
-    words = split(" |-|—|/|\[|\]", wordsCombination)
-    endResult = dict()
+    words = split(" |-|—|/|[|]", wordsCombination)
     tempArray = ""
     for word in words:
         data = getTranscription(word)
         for dictionary in data:
             for key in dictionary:
+                # If the word is a verb, find out which is its proper form and use it as output.
                 if key == "verb":
                     if word[-3:] == "ing":
                         if syllableCount(word) == 1:
@@ -546,6 +529,7 @@ def getComplexTranscription(wordsCombination):
                         tempArray += dictionary["verb"][3] + " "
                     else:
                         tempArray += dictionary["verb"][1] + " "
+                # Otherwise, return all matched transcriptions.
                 else:
                     tempArray += dictionary[key][0] + " "
                     break
@@ -557,9 +541,12 @@ def updateProgress(thisWord, totalWords, word, errorCount):
     sys.stdout.flush()
     sys.stdout.write("\033[K")
     sys.stdout.flush()
-    if (thisWord == totalWords):
-        print ("\r\n")
+    # if (thisWord == totalWords):
+    #     print ("\r\n")
     return
+
+def nextColumn(currentColumn):
+    return str(chr(ord(currentColumn) + 1))
 
 # Check if the file provided via argument is a valid file.
 def is_valid_file(parser, arg):
@@ -614,6 +601,7 @@ if PLAINTEXT:
                             for transcriptions in result:
                                 for wordType in transcriptions:
                                     print(word + ' (' + wordType + ')')
+                                    # If the word is a verb, find out which is its proper form and use it as output.
                                     if wordType == "verb":
                                         if word[-3:] == "ing":
                                             if syllableCount(word) == 1:
@@ -636,6 +624,7 @@ if PLAINTEXT:
                                             print ("\t" + transcriptions["verb"][3])
                                         else:
                                             print ("\t" + transcriptions["verb"][1])
+                                    # Otherwise, return all matched transcriptions.
                                     else:
                                         for transcription in transcriptions[wordType]:
                                             print("\t" + transcription)
@@ -645,31 +634,33 @@ else:
     workbook = load_workbook(filename=FILENAME)
     sheet = workbook.active
     totalWords = sheet.max_row
-    i = 1
+    row = 1
     errorCount = 0
-    rPos = "A" + str(1)
-    wPos = "B" + str(1)
+    rPos = "A" + str(1) # rPos = Read Position
+    wPos = "B" + str(1) # wPos = Write Position
     while sheet[rPos].value != None:
         if sheet[wPos].value == None:
             shouldContinue = True
             word = sheet[rPos].value
             word = word.strip(CHARACTERS_TO_STRIP)
             word = word.replace("’", "'")
-            updateProgress(i, totalWords, word, errorCount)
+            word = word.lower()
+            if not VERBOSE_DEBUG:
+                updateProgress(row, totalWords, word, errorCount)
             complex = False
             try:
                 for separator in WORD_SEPARATORS:
                     if separator in word:
                         result = getComplexTranscription(word)
                         sheet[wPos] = result
-                        wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
+                        wPos = str(chr(ord(wPos[0]) + 1)) + str(row)
                         shouldContinue = False
                 if shouldContinue:
-                    word = word.lower()
                     result = getTranscription(word)
                     for transcriptions in result:
                         for wordType in transcriptions:
                             transcribed = ""
+                            # If the word is a verb, find out which is its proper form and use it as output.
                             if wordType == "verb":
                                 if word[-3:] == "ing":
                                     if syllableCount(word) == 1:
@@ -693,23 +684,29 @@ else:
                                     transcribed = transcriptions["verb"][3]
                                 else:
                                     transcribed = transcriptions["verb"][1]
+                                sheet[wPos] = transcribed
+                                wPos = nextColumn(wPos[0]) + str(row)
+                            # Otherwise, return all matched transcriptions.
                             else:
                                 for transcription in transcriptions[wordType]:
                                     if transcription != "":
-                                        transcribed = transcription
-                            sheet[wPos] = transcribed
-                            wPos = str(chr(ord(wPos[0]) + 1)) + str(i)
+                                        sheet[wPos] = transcription
+                                        wPos = nextColumn(wPos[0]) + str(row)
             except Exception as e:
                 errorCount += 1
-        if (i % 50 == 0):
+                print (e)
+        else:
+            if not VERBOSE_DEBUG:
+                updateProgress(row, totalWords, "*skipped*", errorCount)
+        if (row % 50 == 0):
             workbook.save(filename=FILENAME)
-        i += 1
-        rPos = "A" + str(i)
-        wPos = "B" + str(i)
+        row += 1
+        rPos = "A" + str(row)
+        wPos = "B" + str(row)
 
     workbook.save(filename=FILENAME)
     workbook.close()
     if (errorCount > 0):
-        print ("\n\r\n\rFinished with {0} error(s). Check the file you supplied (transcribe.xlsx by default).".format(errorCount))
+        print ("\n\rFinished with {0} error(s). Check the file you supplied (transcribe.xlsx by default).".format(errorCount))
     else:
-        print ("\n\r\n\rAll done - no problems encountered. Check the file you supplied (transcribe.xlsx by default).")
+        print ("\n\rAll done - no problems encountered. Check the file you supplied (transcribe.xlsx by default).")
